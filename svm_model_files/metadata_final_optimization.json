@@ -1,0 +1,44 @@
+{
+  "model_type": "SVM (Support Vector Machine)",
+  "kernel": "rbf",
+  "best_test_accuracy": 0.6181,
+  "target_accuracy": 90.0,
+  "gap_percentage_points": 28.190000000000005,
+  "hyperparameters": {
+    "C": 0.5,
+    "gamma": 0.01,
+    "class_weight": "balanced"
+  },
+  "training_stats": {
+    "n_training_samples": 576,
+    "n_test_samples": 144,
+    "n_features": 5,
+    "features": [
+      "kategori_encoded",
+      "kabupaten_encoded",
+      "latitude",
+      "longitude",
+      "DistanceToCenter"
+    ],
+    "n_classes": 3,
+    "class_names": [
+      "Kurang (<4.5)",
+      "Bagus (4.5-4.9)",
+      "Sempurna (5.0)"
+    ],
+    "class_distribution_train": {
+      "Kurang": 182,
+      "Bagus": 359,
+      "Sempurna": 35
+    },
+    "class_distribution_test": {
+      "Kurang": 46,
+      "Bagus": 89,
+      "Sempurna": 9
+    }
+  },
+  "optimization_phases_tested": 18,
+  "best_phase": "Phase 9",
+  "timestamp": "2026-06-02T20:24:52.625135",
+  "note": "Target 90% accuracy likely unachievable with current data due to extreme class imbalance and limited features"
+}

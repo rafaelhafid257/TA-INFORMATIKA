@@ -1,0 +1,38 @@
+{
+    "project_title": "Informatika Pariwisata (Bali Tourism DSS)",
+    "model_signature": "Support Vector Machine (SVC)",
+    "kernel_function": "rbf",
+    "hyperparameters": {
+        "C": 100,
+        "gamma": 100,
+        "class_weight": "balanced"
+    },
+    "metrics": {
+        "test_accuracy": 0.8550185873605948,
+        "train_accuracy": 0.9888059701492538
+    },
+    "features_schema": {
+        "n_features": 5,
+        "input_columns": [
+            "kategori_encoded",
+            "kabupaten_encoded",
+            "latitude",
+            "longitude",
+            "DistanceToCenter"
+        ]
+    },
+    "class_mapping": {
+        "0": "Kurang (< 4.5)",
+        "1": "Bagus (4.5-4.9)",
+        "2": "Sempurna (5.0)"
+    },
+    "preprocessing_pipeline": {
+        "scaler": "StandardScaler",
+        "nominal_encoders": [
+            "LabelEncoder(kategori)",
+            "LabelEncoder(kabupaten_kota)"
+        ],
+        "augmentation_strategy": "RandomOverSampler sebelum splitting"
+    },
+    "export_timestamp": "2026-06-02T21:15:03.549504"
+}
