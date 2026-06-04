@@ -488,5 +488,127 @@ def main():
                 st.write(f"🏢 **Jarak ke Denpasar (Pusat):** {dist_ref:.2f} km")
                 st.markdown("</div>", unsafe_allow_html=True)
 
+    # ================================================================
+    # SECTION: TABEL PERBANDINGAN BATCH PREDICTION PER KABUPATEN
+    # ================================================================
+    st.markdown("---")
+    st.markdown("<h3 style='text-align: center;'>🗃️ Tabel Perbandingan Semua Objek Wisata per Kabupaten</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #94a3b8;'>Model SVM memproyeksikan seluruh objek wisata di kabupaten terpilih sekaligus berdasarkan koordinat dan kategorinya.</p>", unsafe_allow_html=True)
+
+    col_filter1, col_filter2 = st.columns([1, 1])
+    with col_filter1:
+        batch_kabupaten = st.selectbox("📌 Pilih Kabupaten untuk Perbandingan", cities, key='batch_kab')
+    with col_filter2:
+        label_filter_options = ["Semua Kelas", "🟢 Sempurna", "🔵 Bagus", "🔴 Kurang"]
+        batch_label_filter = st.selectbox("🔍 Filter Hasil Prediksi", label_filter_options, key='batch_label_filter')
+
+    batch_btn = st.button("🔄 Jalankan Batch Prediction", key='batch_btn')
+
+    if batch_btn:
+        with st.spinner(f"Memproses seluruh data wisata di {batch_kabupaten}..."):
+            # Ambil semua data dari kabupaten yang dipilih
+            df_batch = df_ref[df_ref['kabupaten_kota'].str.strip().str.lower() == batch_kabupaten.strip().lower()].copy()
+            df_batch = df_batch.dropna(subset=['latitude', 'longitude'])
+
+            if df_batch.empty:
+                st.warning("Tidak ada data wisata untuk kabupaten yang dipilih.")
+            else:
+                results = []
+                for _, row in df_batch.iterrows():
+                    try:
+                        dist = haversine_distance(DENPASAR_LAT, DENPASAR_LON, row['latitude'], row['longitude'])
+                        kat_enc = le_kategori.transform([row['kategori']])[0]
+                        kab_enc = le_kabupaten.transform([row['kabupaten_kota']])[0]
+
+                        x = pd.DataFrame(
+                            [[kat_enc, kab_enc, row['latitude'], row['longitude'], dist]],
+                            columns=['kategori_encoded', 'kabupaten_encoded', 'latitude', 'longitude', 'DistanceToCenter']
+                        )
+                        x_sc = scaler.transform(x)
+                        pred = svm_model.predict(x_sc)[0]
+                        prob = svm_model.predict_proba(x_sc)[0]
+
+                        if pred == 2:
+                            label = "🟢 Sempurna"
+                        elif pred == 1:
+                            label = "🔵 Bagus"
+                        else:
+                            label = "🔴 Kurang"
+
+                        results.append({
+                            "Nama Objek Wisata": row['nama'],
+                            "Kategori": row['kategori'],
+                            "Latitude": round(row['latitude'], 5),
+                            "Longitude": round(row['longitude'], 5),
+                            "Jarak ke Denpasar (km)": round(dist, 2),
+                            "Hasil Prediksi SVM": label,
+                            "Prob. Sempurna (%)": round(prob[2] * 100, 1),
+                            "Prob. Bagus (%)": round(prob[1] * 100, 1),
+                            "Prob. Kurang (%)": round(prob[0] * 100, 1),
+                        })
+                    except Exception:
+                        continue
+
+                df_result = pd.DataFrame(results)
+
+                # Terapkan filter label jika dipilih
+                if batch_label_filter != "Semua Kelas":
+                    df_result = df_result[df_result["Hasil Prediksi SVM"] == batch_label_filter]
+
+                # Ringkasan Statistik Kabupaten
+                df_all_results = pd.DataFrame(results)
+                sempurna_count = (df_all_results["Hasil Prediksi SVM"] == "🟢 Sempurna").sum()
+                bagus_count    = (df_all_results["Hasil Prediksi SVM"] == "🔵 Bagus").sum()
+                kurang_count   = (df_all_results["Hasil Prediksi SVM"] == "🔴 Kurang").sum()
+                total_count    = len(df_all_results)
+
+                st.markdown(f"""
+                <div style='display: flex; gap: 16px; margin-bottom: 20px;'>
+                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(16,185,129,0.12); border: 1px solid #10b981; text-align: center;'>
+                        <div style='font-size: 28px; font-weight: bold; color: #34d399;'>{sempurna_count}</div>
+                        <div style='color: #94a3b8; font-size: 13px;'>🟢 Sempurna</div>
+                    </div>
+                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(59,130,246,0.12); border: 1px solid #3b82f6; text-align: center;'>
+                        <div style='font-size: 28px; font-weight: bold; color: #60a5fa;'>{bagus_count}</div>
+                        <div style='color: #94a3b8; font-size: 13px;'>🔵 Bagus</div>
+                    </div>
+                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(239,68,68,0.12); border: 1px solid #ef4444; text-align: center;'>
+                        <div style='font-size: 28px; font-weight: bold; color: #f87171;'>{kurang_count}</div>
+                        <div style='color: #94a3b8; font-size: 13px;'>🔴 Kurang</div>
+                    </div>
+                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); text-align: center;'>
+                        <div style='font-size: 28px; font-weight: bold; color: #e2e8f0;'>{total_count}</div>
+                        <div style='color: #94a3b8; font-size: 13px;'>📊 Total Data</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if df_result.empty:
+                    st.info(f"Tidak ada objek wisata dengan prediksi **{batch_label_filter}** di {batch_kabupaten}.")
+                else:
+                    st.dataframe(
+                        df_result,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Hasil Prediksi SVM": st.column_config.TextColumn("Prediksi SVM", width="medium"),
+                            "Prob. Sempurna (%)": st.column_config.ProgressColumn("Sempurna %", min_value=0, max_value=100, format="%.1f%%"),
+                            "Prob. Bagus (%)": st.column_config.ProgressColumn("Bagus %", min_value=0, max_value=100, format="%.1f%%"),
+                            "Prob. Kurang (%)": st.column_config.ProgressColumn("Kurang %", min_value=0, max_value=100, format="%.1f%%"),
+                        }
+                    )
+
+                    # Tombol unduh CSV
+                    csv_export = df_result.copy()
+                    csv_export["Hasil Prediksi SVM"] = csv_export["Hasil Prediksi SVM"].str.replace(r'[🟢🔵🔴]\s*', '', regex=True)
+                    csv_bytes = csv_export.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="⬇️ Unduh Hasil sebagai CSV",
+                        data=csv_bytes,
+                        file_name=f"prediksi_wisata_{batch_kabupaten.replace(' ', '_')}.csv",
+                        mime="text/csv",
+                        key='download_csv'
+                    )
+
 if __name__ == "__main__":
     main()
