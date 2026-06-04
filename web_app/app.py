@@ -327,13 +327,17 @@ def main():
         st.session_state.input_lat = -8.6500
     if 'input_lon' not in st.session_state:
         st.session_state.input_lon = 115.2167
+    if 'selected_kat' not in st.session_state:
+        st.session_state.selected_kat = categories[0]
+    if 'kab_selector' not in st.session_state:
+        st.session_state.kab_selector = cities[0]
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.markdown("### 🗺️ Data Geografis & Kategori")
         st.markdown("<div class='glass-container'>", unsafe_allow_html=True)
-        selected_kategori = st.selectbox("Pilih Kategori Wisata", categories)
+        selected_kategori = st.selectbox("Pilih Kategori Wisata", categories, key='selected_kat')
         
         # Dropdown Kabupaten memicu fungsi callback update_coords saat diubah
         selected_kabupaten = st.selectbox("Pilih Kabupaten/Kota", cities, key='kab_selector', on_change=update_coords)
@@ -347,7 +351,29 @@ def main():
             
         st.markdown("</div>", unsafe_allow_html=True)
         
-        predict_btn = st.button("Analisis Kepopuleran 🚀")
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            predict_btn = st.button("Analisis Kepopuleran 🚀")
+        with col_btn2:
+            example_btn = st.button("🎲 Contoh Objek Wisata")
+            
+        if example_btn:
+            random_row = df_ref.sample(n=1).iloc[0]
+            st.session_state.input_lat = float(random_row['latitude'])
+            st.session_state.input_lon = float(random_row['longitude'])
+            st.session_state.selected_kat = random_row['kategori']
+            st.session_state.kab_selector = random_row['kabupaten_kota']
+            st.session_state.example_name = random_row['nama']
+            st.session_state.example_lat = float(random_row['latitude'])
+            st.session_state.example_lon = float(random_row['longitude'])
+            st.rerun()
+            
+        if 'example_name' in st.session_state:
+            if (st.session_state.input_lat != st.session_state.get('example_lat') or 
+                st.session_state.input_lon != st.session_state.get('example_lon')):
+                del st.session_state.example_name
+            else:
+                st.info(f"📍 Contoh: **{st.session_state.example_name}**")
         
     with col2:
         st.markdown("### 📍 Lokasi Objek Wisata (Peta Bali)")
