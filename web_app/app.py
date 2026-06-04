@@ -311,6 +311,16 @@ def update_coords():
             st.session_state.input_lat = lat
             st.session_state.input_lon = lon
             break
+def load_example_coords(df_ref):
+    """Callback untuk mengisi koordinat contoh dan data terkait ke session state"""
+    random_row = df_ref.sample(n=1).iloc[0]
+    st.session_state.input_lat = float(random_row['latitude'])
+    st.session_state.input_lon = float(random_row['longitude'])
+    st.session_state.selected_kat = random_row['kategori']
+    st.session_state.kab_selector = random_row['kabupaten_kota']
+    st.session_state.example_name = random_row['nama']
+    st.session_state.example_lat = float(random_row['latitude'])
+    st.session_state.example_lon = float(random_row['longitude'])
 
 # --- UI Layout ---
 def main():
@@ -355,18 +365,7 @@ def main():
         with col_btn1:
             predict_btn = st.button("Analisis Kepopuleran 🚀")
         with col_btn2:
-            example_btn = st.button("🎲 Contoh Objek Wisata")
-            
-        if example_btn:
-            random_row = df_ref.sample(n=1).iloc[0]
-            st.session_state.input_lat = float(random_row['latitude'])
-            st.session_state.input_lon = float(random_row['longitude'])
-            st.session_state.selected_kat = random_row['kategori']
-            st.session_state.kab_selector = random_row['kabupaten_kota']
-            st.session_state.example_name = random_row['nama']
-            st.session_state.example_lat = float(random_row['latitude'])
-            st.session_state.example_lon = float(random_row['longitude'])
-            st.rerun()
+            st.button("🎲 Contoh Objek Wisata", on_click=load_example_coords, args=(df_ref,))
             
         if 'example_name' in st.session_state:
             if (st.session_state.input_lat != st.session_state.get('example_lat') or 
