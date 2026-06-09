@@ -232,18 +232,15 @@ def load_dependencies():
     
     return svm_model, le_kategori, le_kabupaten, scaler, categories, cities, df_ref
 
-def find_top_n_spots(target_lat, target_lon, target_kabupaten, df_ref, n=TOP_N_SPOTS):
-    """Mencari top-N objek wisata nyata terdekat dari kabupaten terpilih berdasarkan jarak Haversine"""
-    df_kab = df_ref[df_ref['kabupaten_kota'].str.strip().str.lower() == target_kabupaten.strip().lower()].copy()
-    if df_kab.empty:
-        df_kab = df_ref.copy()
-
-    df_kab['_dist_km'] = df_kab.apply(
+def find_top_n_spots(target_lat, target_lon, df_ref, n=TOP_N_SPOTS):
+    """Mencari top-N objek wisata nyata terdekat secara global berdasarkan jarak Haversine"""
+    df_temp = df_ref.copy()
+    df_temp['_dist_km'] = df_temp.apply(
         lambda row: haversine_distance(target_lat, target_lon, row['latitude'], row['longitude']),
         axis=1
     )
 
-    top_n = df_kab.nsmallest(n, '_dist_km').reset_index(drop=True)
+    top_n = df_temp.nsmallest(n, '_dist_km').reset_index(drop=True)
 
     results = []
     for _, row in top_n.iterrows():
@@ -253,6 +250,7 @@ def find_top_n_spots(target_lat, target_lon, target_kabupaten, df_ref, n=TOP_N_S
             'latitude': row['latitude'],
             'longitude': row['longitude'],
             'rating': row['rating'],
+            'kabupaten_kota': row['kabupaten_kota'],
             'distance_km': row['_dist_km']
         })
     return results
@@ -438,10 +436,10 @@ def main():
         
         c_lat, c_lon = st.columns(2)
         with c_lat:
-            # Value dikendalikan oleh session state
-            lat = st.number_input("Latitude", key='input_lat', format="%.5f")
+            # Value dikendalikan oleh session state, presisi ditingkatkan (step=1e-7)
+            lat = st.number_input("Latitude", key='input_lat', format="%.7f", step=0.0000001)
         with c_lon:
-            lon = st.number_input("Longitude", key='input_lon', format="%.5f")
+            lon = st.number_input("Longitude", key='input_lon', format="%.7f", step=0.0000001)
             
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -476,21 +474,20 @@ def main():
     with col2:
         st.markdown("### 📍 Lokasi Objek Wisata (Peta Bali)")
 
-        # Temukan top-N spot terdekat berdasarkan lat/lon saat ini
-        top_spots = find_top_n_spots(lat, lon, selected_kabupaten, df_ref)
+        # Temukan top-N spot terdekat secara global berdasarkan lat/lon saat ini
+        top_spots = find_top_n_spots(lat, lon, df_ref)
 
         # Peta ter-center di titik Lat/Lon saat ini
-        m = folium.Map(location=[lat, lon], zoom_start=10, tiles="CartoDB positron")
+        m = folium.Map(location=[lat, lon], zoom_start=11, tiles="CartoDB positron")
 
         bali_bounds = [[-8.9, 114.4], [-8.0, 115.7]]
-        m.fit_bounds(bali_bounds)
         m.options['minZoom'] = 9
         m.options['maxBounds'] = bali_bounds
 
         # Marker: Input manual pengguna (Merah)
         folium.Marker(
             location=[lat, lon],
-            popup=f"<b>Lokasi Input Anda</b><br>Koordinat: {lat:.5f}, {lon:.5f}",
+            popup=f"<b>Lokasi Input Anda</b><br>Koordinat: {lat:.7f}, {lon:.7f}",
             tooltip="📌 Lokasi Input Anda",
             icon=folium.Icon(color="red", icon="info-sign")
         ).add_to(m)
@@ -509,6 +506,7 @@ def main():
                 popup=(
                     f"<b>#{rank+1}{label}</b><br>"
                     f"<b>{spot['nama']}</b><br>"
+                    f"Wilayah: {spot['kabupaten_kota']}<br>"
                     f"Kategori: {spot['kategori']}<br>"
                     f"Rating: ⭐ {r_str}<br>"
                     f"Jarak dari input: {spot['distance_km']:.2f} km"
@@ -527,6 +525,10 @@ def main():
                     tooltip=f"#{rank+1} {spot['nama']}: {spot['distance_km']:.2f} km"
                 ).add_to(m)
 
+        # Fit bounds agar fokus pada input dan referensi terdekat
+        points = [[lat, lon]] + [[spot['latitude'], spot['longitude']] for spot in top_spots]
+        m.fit_bounds(points)
+
         st_folium(m, width=700, height=350, returned_objects=[])
         
     st.markdown("---")
@@ -535,20 +537,20 @@ def main():
         st.markdown("<h3 style='text-align: center;'>📊 Hasil Prediksi (Pendekatan Spasial Terdekat)</h3>", unsafe_allow_html=True)
         
         with st.spinner("Melakukan inferensi spasial..."):
-            # Ambil top-N spot terdekat di kabupaten terpilih
-            top_spots = find_top_n_spots(lat, lon, selected_kabupaten, df_ref)
-            # Gunakan spot #1 (terdekat) sebagai referensi utama untuk inferensi model
+            # Ambil top-N spot terdekat secara global
+            top_spots = find_top_n_spots(lat, lon, df_ref)
+            # Gunakan spot #1 (terdekat) sebagai referensi utama
             nearest_spot = top_spots[0]
-            ref_lat = nearest_spot['latitude']
-            ref_lon = nearest_spot['longitude']
+            detected_kabupaten = nearest_spot['kabupaten_kota']
 
-            # Hitung jarak dari Denpasar berdasarkan koordinat nyata terdekat
-            dist_ref = haversine_distance(DENPASAR_LAT, DENPASAR_LON, ref_lat, ref_lon)
+            # Hitung jarak dari Denpasar berdasarkan koordinat input pengguna aktual
+            dist_input = haversine_distance(DENPASAR_LAT, DENPASAR_LON, lat, lon)
             kat_encoded = le_kategori.transform([selected_kategori])[0]
-            kab_encoded = le_kabupaten.transform([selected_kabupaten])[0]
+            kab_encoded = le_kabupaten.transform([detected_kabupaten])[0]
 
+            # Gunakan koordinat input user secara langsung untuk prediksi
             x_df = pd.DataFrame(
-                [[kat_encoded, kab_encoded, ref_lat, ref_lon, dist_ref]],
+                [[kat_encoded, kab_encoded, lat, lon, dist_input]],
                 columns=['kategori_encoded', 'kabupaten_encoded', 'latitude', 'longitude', 'DistanceToCenter']
             )
             x_scaled = scaler.transform(x_df)
@@ -568,7 +570,27 @@ def main():
 
             col_res1, col_res2 = st.columns([2, 1])
             with col_res1:
+                # Tampilkan info jika wilayah terdeteksi otomatis berbeda dengan selectbox dropdown
+                warn_html = ""
+                if detected_kabupaten.strip().lower() != selected_kabupaten.strip().lower():
+                    warn_html = f"""
+                    <div style='
+                        background: rgba(245, 158, 11, 0.15);
+                        border: 1px solid #f59e0b;
+                        color: #fbbf24;
+                        padding: 10px 15px;
+                        border-radius: 8px;
+                        margin-bottom: 15px;
+                        font-size: 13px;
+                        text-align: left;
+                    '>
+                        ⚠️ <b>Deteksi Lokasi:</b> Koordinat berada di wilayah <b>{detected_kabupaten}</b>. 
+                        Sistem menggunakan wilayah ini agar input model SVM sesuai dengan koordinat aktual.
+                    </div>
+                    """
+
                 st.markdown(f"""
+                {warn_html}
                 <div class='{css_class}' style='height: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px;'>
                     <div>{kelas_teks}</div>
                     <div style='font-size: 14px; font-weight: normal; margin-top: 10px; opacity: 0.8;'>
@@ -579,7 +601,7 @@ def main():
 
                 # Tambahkan penjelasan kualitatif pariwisata (DSS Insights) di bawah banner hasil
                 investor_insight, gov_insight, spatial_desc = generate_explanation(
-                    prediction, dist_ref, selected_kategori, selected_kabupaten
+                    prediction, dist_input, selected_kategori, detected_kabupaten
                 )
 
                 st.markdown("<div class='glass-container' style='margin-top: 20px;'>", unsafe_allow_html=True)
@@ -599,13 +621,13 @@ def main():
                 st.write(f"🔵 Bagus: **{probabilities[1]*100:.1f}%**")
                 st.write(f"🔴 Kurang: **{probabilities[0]*100:.1f}%**")
                 st.markdown("---")
-                st.write(f"🏢 **Jarak ke Denpasar:** {dist_ref:.2f} km")
+                st.write(f"🏢 **Jarak ke Denpasar:** {dist_input:.2f} km")
                 st.markdown("</div>", unsafe_allow_html=True)
 
                 # Panel Top-N Referensi Terproyeksi
                 st.markdown("<div class='glass-container' style='margin-top: 15px;'>", unsafe_allow_html=True)
                 st.markdown(f"#### 📍 Top {TOP_N_SPOTS} Referensi Terdekat")
-                st.caption(f"Objek wisata nyata di {selected_kabupaten} paling dekat dari titik input Anda.")
+                st.caption(f"Objek wisata nyata paling dekat dari titik input Anda.")
                 rank_colors = ["🔵", "🔹", "🩵", "🔷", "💠"]
                 for rank, spot in enumerate(top_spots):
                     r_val = spot['rating']
@@ -626,6 +648,9 @@ def main():
                             <div style='font-size:13px; font-weight:bold; color:#e2e8f0;'>
                                 {icon} #{rank+1} {spot['nama']}
                                 <span style='font-size:10px; color:#94a3b8; font-weight:normal;'>{label}</span>
+                            </div>
+                            <div style='font-size:10px; color:#cbd5e1; margin-top:2px; font-style:italic;'>
+                                Wilayah: {spot['kabupaten_kota']}
                             </div>
                             <div style='font-size:11px; color:#94a3b8; margin-top:3px;'>
                                 📂 {spot['kategori']} &nbsp;|&nbsp;
