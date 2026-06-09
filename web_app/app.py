@@ -517,12 +517,45 @@ def main():
 
             # Garis putus-putus dari input ke masing-masing spot
             if spot['distance_km'] > 0.05:
+                # Gambar garis hubung
                 folium.PolyLine(
                     locations=[[lat, lon], [spot['latitude'], spot['longitude']]],
-                    color="#3b82f6" if rank == 0 else "#94a3b8",
-                    weight=2.5 if rank == 0 else 1.5,
+                    color="#2563eb" if rank == 0 else "#64748b",
+                    weight=3 if rank == 0 else 1.5,
                     dash_array='5, 5',
-                    tooltip=f"#{rank+1} {spot['nama']}: {spot['distance_km']:.2f} km"
+                    tooltip=f"Jarak ke #{rank+1} {spot['nama']}: {spot['distance_km']:.2f} km"
+                ).add_to(m)
+
+                # Tambahkan label teks jarak di titik tengah garis
+                mid_lat = (lat + spot['latitude']) / 2
+                mid_lon = (lon + spot['longitude']) / 2
+                
+                # Format label dengan latar belakang putih semi-transparan agar mudah dibaca
+                label_color = "#2563eb" if rank == 0 else "#334155"
+                border_color = "#3b82f6" if rank == 0 else "#94a3b8"
+                bg_opacity = 0.9 if rank == 0 else 0.8
+                
+                folium.Marker(
+                    location=[mid_lat, mid_lon],
+                    icon=folium.DivIcon(
+                        html=f"""
+                            <div style="
+                                font-family: 'Inter', sans-serif;
+                                font-size: 10px;
+                                color: {label_color};
+                                background-color: rgba(255, 255, 255, {bg_opacity});
+                                border: 1px solid {border_color};
+                                border-radius: 4px;
+                                padding: 2px 5px;
+                                white-space: nowrap;
+                                font-weight: bold;
+                                box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+                                transform: translate(-50%, -50%);
+                            ">
+                                {spot['distance_km']:.2f} km
+                            </div>
+                        """
+                    )
                 ).add_to(m)
 
         # Fit bounds agar fokus pada input dan referensi terdekat
