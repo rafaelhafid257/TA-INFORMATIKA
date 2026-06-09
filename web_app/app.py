@@ -232,15 +232,52 @@ def load_dependencies():
     
     return svm_model, le_kategori, le_kabupaten, scaler, categories, cities, df_ref
 
-def find_top_n_spots(target_lat, target_lon, df_ref, n=TOP_N_SPOTS):
-    """Mencari top-N objek wisata nyata terdekat secara global berdasarkan jarak Haversine"""
+def find_top_n_spots(target_lat, target_lon, df_ref, n=TOP_N_SPOTS,
+                     filter_kabupaten=None, filter_kategori=None):
+    """
+    Mencari top-N objek wisata terdekat berdasarkan jarak Haversine.
+    Difilter berdasarkan kabupaten dan kategori yang dipilih pengguna.
+    Fallback:
+      - Jika hasil filter kab+kat < n, perluas ke seluruh kabupaten (tanpa filter kategori)
+      - Jika masih < n, cari secara global
+    """
     df_temp = df_ref.copy()
+
+    # Hitung jarak terlebih dahulu
     df_temp['_dist_km'] = df_temp.apply(
         lambda row: haversine_distance(target_lat, target_lon, row['latitude'], row['longitude']),
         axis=1
     )
 
-    top_n = df_temp.nsmallest(n, '_dist_km').reset_index(drop=True)
+    # --- Filter bertahap ---
+    df_filtered = df_temp.copy()
+
+    # Level 1: Filter kabupaten + kategori
+    if filter_kabupaten:
+        mask_kab = df_filtered['kabupaten_kota'].str.strip().str.lower() == filter_kabupaten.strip().lower()
+        df_filtered = df_filtered[mask_kab]
+
+    if filter_kategori and len(df_filtered) > 0:
+        mask_kat = df_filtered['kategori'].str.strip().str.lower() == filter_kategori.strip().lower()
+        df_filtered_kat = df_filtered[mask_kat]
+
+        if len(df_filtered_kat) >= n:
+            df_filtered = df_filtered_kat
+        elif len(df_filtered_kat) > 0:
+            # Ambil semua yang sesuai kategori, sisanya ambil dari kabupaten tanpa filter kategori
+            top_kat = df_filtered_kat.nsmallest(len(df_filtered_kat), '_dist_km')
+            sisa = n - len(df_filtered_kat)
+            idx_already = set(top_kat.index)
+            df_kab_sisa = df_filtered[~df_filtered.index.isin(idx_already)].nsmallest(sisa, '_dist_km')
+            df_filtered = pd.concat([top_kat, df_kab_sisa]).reset_index(drop=True)
+        # else: tetap pakai kabupaten saja (df_filtered tanpa filter kategori)
+
+    # Jika masih belum cukup setelah filter kabupaten, fallback ke global
+    if len(df_filtered) < n:
+        df_sisa_global = df_temp[~df_temp.index.isin(df_filtered.index)].nsmallest(n - len(df_filtered), '_dist_km')
+        df_filtered = pd.concat([df_filtered, df_sisa_global]).reset_index(drop=True)
+
+    top_n = df_filtered.nsmallest(n, '_dist_km').reset_index(drop=True)
 
     results = []
     for _, row in top_n.iterrows():
@@ -474,8 +511,12 @@ def main():
     with col2:
         st.markdown("### 📍 Lokasi Objek Wisata (Peta Bali)")
 
-        # Temukan top-N spot terdekat secara global berdasarkan lat/lon saat ini
-        top_spots = find_top_n_spots(lat, lon, df_ref)
+        # Temukan top-N spot terdekat, difilter sesuai pilihan dropdown pengguna
+        top_spots = find_top_n_spots(
+            lat, lon, df_ref,
+            filter_kabupaten=selected_kabupaten,
+            filter_kategori=selected_kategori
+        )
 
         # Peta ter-center di titik Lat/Lon saat ini
         m = folium.Map(location=[lat, lon], zoom_start=11, tiles="CartoDB positron")
@@ -570,8 +611,12 @@ def main():
         st.markdown("<h3 style='text-align: center;'>📊 Hasil Prediksi (Pendekatan Spasial Terdekat)</h3>", unsafe_allow_html=True)
         
         with st.spinner("Melakukan inferensi spasial..."):
-            # Ambil top-N spot terdekat secara global
-            top_spots = find_top_n_spots(lat, lon, df_ref)
+            # Ambil top-N spot sesuai filter kabupaten dan kategori yang dipilih pengguna
+            top_spots = find_top_n_spots(
+                lat, lon, df_ref,
+                filter_kabupaten=selected_kabupaten,
+                filter_kategori=selected_kategori
+            )
             # Gunakan spot #1 (terdekat) sebagai referensi utama
             nearest_spot = top_spots[0]
             detected_kabupaten = nearest_spot['kabupaten_kota']
