@@ -118,6 +118,38 @@ def load_custom_css():
             animation: fadeIn 0.5s ease-in-out;
         }
         
+        /* Example Tourism Spot Card style */
+        .example-card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-left: 5px solid #8b5cf6;
+        }
+        .example-card h5 {
+            margin: 0 0 5px 0 !important;
+            color: #60a5fa !important;
+            font-size: 16px !important;
+            background: none !important;
+            -webkit-text-fill-color: initial !important;
+        }
+        .example-card p {
+            margin: 3px 0 !important;
+            font-size: 13px !important;
+            color: #cbd5e1 !important;
+        }
+        .rating-badge {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: bold;
+            font-size: 12px;
+            display: inline-block;
+        }
+        
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
@@ -128,6 +160,9 @@ def load_custom_css():
 # --- Backend Processing ---
 DENPASAR_LAT = -8.6586
 DENPASAR_LON = 115.2106
+
+# Jumlah objek wisata terdekat yang ditampilkan sebagai referensi
+TOP_N_SPOTS = 5
 
 # Titik Koordinat Pusat Default Setiap Kabupaten (Kasar)
 KABUPATEN_COORDS = {
@@ -161,13 +196,14 @@ def load_dependencies():
     
     df = pd.read_csv(dataset_path)
     
-    df_ref = df[['nama', 'kategori', 'kabupaten_kota', 'latitude', 'longitude']].copy()
+    df_ref = df[['nama', 'kategori', 'kabupaten_kota', 'latitude', 'longitude', 'rating']].copy()
     df_ref['latitude'] = pd.to_numeric(df_ref['latitude'], errors='coerce')
     df_ref['longitude'] = pd.to_numeric(df_ref['longitude'], errors='coerce')
+    df_ref['rating'] = pd.to_numeric(df_ref['rating'], errors='coerce')
     df_ref = df_ref.dropna()
     
     # Filter sensor kata-kata konyol / troll di Google Maps agar aman saat sidang TA
-    troll_pattern = r'berak|kencing|kontol|memek|jembut|ngentot|peli|toket|troll|sampah|berak masal|toilet'
+    troll_pattern = r'berak|kencing|troll|sampah|berak masal|toilet'
     df_ref = df_ref[~df_ref['nama'].str.lower().str.contains(troll_pattern, na=False)]
     
     df_clean = df.drop(columns=['nama', 'preferensi', 'link'])
@@ -176,7 +212,7 @@ def load_dependencies():
     df_clean = df_clean.dropna()
     
     df_clean['DistanceToCenter'] = df_clean.apply(
-        lambda row: haversine_distance(DENPAR_LAT := DENPASAR_LAT, DENPASAR_LON, row['latitude'], row['longitude']),
+        lambda row: haversine_distance(DENPASAR_LAT, DENPASAR_LON, row['latitude'], row['longitude']),
         axis=1
     )
     
@@ -196,28 +232,30 @@ def load_dependencies():
     
     return svm_model, le_kategori, le_kabupaten, scaler, categories, cities, df_ref
 
-def find_nearest_spot(target_lat, target_lon, target_kabupaten, df_ref):
-    """Mencari objek wisata nyata terdekat dari kabupaten terpilih"""
-    df_kab = df_ref[df_ref['kabupaten_kota'].str.strip().str.lower() == target_kabupaten.strip().lower()]
+def find_top_n_spots(target_lat, target_lon, target_kabupaten, df_ref, n=TOP_N_SPOTS):
+    """Mencari top-N objek wisata nyata terdekat dari kabupaten terpilih berdasarkan jarak Haversine"""
+    df_kab = df_ref[df_ref['kabupaten_kota'].str.strip().str.lower() == target_kabupaten.strip().lower()].copy()
     if df_kab.empty:
-        df_kab = df_ref
-        
-    distances = df_kab.apply(
+        df_kab = df_ref.copy()
+
+    df_kab['_dist_km'] = df_kab.apply(
         lambda row: haversine_distance(target_lat, target_lon, row['latitude'], row['longitude']),
         axis=1
     )
-    
-    idx_min = distances.idxmin()
-    nearest_row = df_kab.loc[idx_min]
-    min_dist = distances.loc[idx_min]
-    
-    return {
-        'nama': nearest_row['nama'],
-        'kategori': nearest_row['kategori'],
-        'latitude': nearest_row['latitude'],
-        'longitude': nearest_row['longitude'],
-        'distance_km': min_dist
-    }
+
+    top_n = df_kab.nsmallest(n, '_dist_km').reset_index(drop=True)
+
+    results = []
+    for _, row in top_n.iterrows():
+        results.append({
+            'nama': row['nama'],
+            'kategori': row['kategori'],
+            'latitude': row['latitude'],
+            'longitude': row['longitude'],
+            'rating': row['rating'],
+            'distance_km': row['_dist_km']
+        })
+    return results
 
 def generate_explanation(prediction, distance, category, kabupaten):
     """Menghasilkan penjelasan kualitatif pariwisata dan wawasan spasial (DSS Insights) untuk Investor & Pemerintah"""
@@ -311,16 +349,49 @@ def update_coords():
             st.session_state.input_lat = lat
             st.session_state.input_lon = lon
             break
+    # Reset spot selector and example card when kabupaten changes
+    st.session_state.spot_selector = "-- Pilih Contoh Objek Wisata --"
+    for key in ['example_name', 'example_rating', 'example_lat', 'example_lon', 'example_kategori', 'example_kabupaten']:
+        if key in st.session_state:
+            del st.session_state[key]
+
+def load_selected_spot_coords():
+    """Callback untuk mengisi koordinat dari objek wisata terpilih dari dropdown"""
+    selected_spot_name = st.session_state.spot_selector
+    if selected_spot_name != "-- Pilih Contoh Objek Wisata --" and 'df_ref_global' in st.session_state:
+        df_ref = st.session_state.df_ref_global
+        spot_rows = df_ref[df_ref['nama'] == selected_spot_name]
+        if not spot_rows.empty:
+            spot_row = spot_rows.iloc[0]
+            st.session_state.input_lat = float(spot_row['latitude'])
+            st.session_state.input_lon = float(spot_row['longitude'])
+            st.session_state.selected_kat = spot_row['kategori']
+            st.session_state.example_name = spot_row['nama']
+            st.session_state.example_rating = spot_row['rating']
+            st.session_state.example_lat = float(spot_row['latitude'])
+            st.session_state.example_lon = float(spot_row['longitude'])
+            st.session_state.example_kategori = spot_row['kategori']
+            st.session_state.example_kabupaten = spot_row['kabupaten_kota']
+    else:
+        for key in ['example_name', 'example_rating', 'example_lat', 'example_lon', 'example_kategori', 'example_kabupaten']:
+            if key in st.session_state:
+                del st.session_state[key]
+
 def load_example_coords(df_ref):
     """Callback untuk mengisi koordinat contoh dan data terkait ke session state"""
     random_row = df_ref.sample(n=1).iloc[0]
+    st.session_state.kab_selector = random_row['kabupaten_kota']
     st.session_state.input_lat = float(random_row['latitude'])
     st.session_state.input_lon = float(random_row['longitude'])
     st.session_state.selected_kat = random_row['kategori']
-    st.session_state.kab_selector = random_row['kabupaten_kota']
     st.session_state.example_name = random_row['nama']
+    st.session_state.example_rating = random_row['rating']
     st.session_state.example_lat = float(random_row['latitude'])
     st.session_state.example_lon = float(random_row['longitude'])
+    st.session_state.example_kategori = random_row['kategori']
+    st.session_state.example_kabupaten = random_row['kabupaten_kota']
+    
+    st.session_state.spot_selector = random_row['nama']
 
 # --- UI Layout ---
 def main():
@@ -331,6 +402,8 @@ def main():
     
     with st.spinner("Memuat model dan matriks spasial..."):
         svm_model, le_kategori, le_kabupaten, scaler, categories, cities, df_ref = load_dependencies()
+    
+    st.session_state.df_ref_global = df_ref
         
     # Inisialisasi State Awal
     if 'input_lat' not in st.session_state:
@@ -352,6 +425,17 @@ def main():
         # Dropdown Kabupaten memicu fungsi callback update_coords saat diubah
         selected_kabupaten = st.selectbox("Pilih Kabupaten/Kota", cities, key='kab_selector', on_change=update_coords)
         
+        # Dropdown Objek Wisata Referensi di Kabupaten Terpilih
+        df_spots = df_ref[df_ref['kabupaten_kota'] == selected_kabupaten]
+        spot_names = ["-- Pilih Contoh Objek Wisata --"] + sorted(df_spots['nama'].unique().tolist())
+            
+        selected_spot = st.selectbox(
+            "🔎 Pilih Contoh dari Objek Wisata Nyata", 
+            spot_names, 
+            key='spot_selector', 
+            on_change=load_selected_spot_coords
+        )
+        
         c_lat, c_lon = st.columns(2)
         with c_lat:
             # Value dikendalikan oleh session state
@@ -370,50 +454,79 @@ def main():
         if 'example_name' in st.session_state:
             if (st.session_state.input_lat != st.session_state.get('example_lat') or 
                 st.session_state.input_lon != st.session_state.get('example_lon')):
-                del st.session_state.example_name
+                # Reset if user manually modifies coordinates
+                for key in ['example_name', 'example_rating', 'example_lat', 'example_lon', 'example_kategori', 'example_kabupaten']:
+                    if key in st.session_state:
+                        del st.session_state[key]
             else:
-                st.info(f"📍 Contoh: **{st.session_state.example_name}**")
+                rating_val = st.session_state.get('example_rating', 'N/A')
+                if isinstance(rating_val, (int, float)) and not pd.isna(rating_val):
+                    rating_str = f"{rating_val:.1f}"
+                else:
+                    rating_str = str(rating_val)
+                st.markdown(f"""
+                <div class='example-card'>
+                    <h5>📍 Objek Wisata Referensi: {st.session_state.example_name}</h5>
+                    <p><b>Kategori:</b> {st.session_state.get('example_kategori', '-')} | <b>Wilayah:</b> {st.session_state.get('example_kabupaten', '-')}</p>
+                    <p><b>Rating Aktual:</b> <span class='rating-badge'>⭐ {rating_str}</span> (Google Maps)</p>
+                    <p style='font-size: 11px; opacity: 0.6; margin-top: 5px !important;'>Koordinat: {st.session_state.example_lat:.5f}, {st.session_state.example_lon:.5f}</p>
+                </div>
+                """, unsafe_allow_html=True)
         
     with col2:
         st.markdown("### 📍 Lokasi Objek Wisata (Peta Bali)")
-        
-        # Temukan spot terdekat berdasarkan lat/lon saat ini
-        nearest_spot = find_nearest_spot(lat, lon, selected_kabupaten, df_ref)
-        ref_lat = nearest_spot['latitude']
-        ref_lon = nearest_spot['longitude']
-        
+
+        # Temukan top-N spot terdekat berdasarkan lat/lon saat ini
+        top_spots = find_top_n_spots(lat, lon, selected_kabupaten, df_ref)
+
         # Peta ter-center di titik Lat/Lon saat ini
         m = folium.Map(location=[lat, lon], zoom_start=10, tiles="CartoDB positron")
-        
+
         bali_bounds = [[-8.9, 114.4], [-8.0, 115.7]]
         m.fit_bounds(bali_bounds)
         m.options['minZoom'] = 9
         m.options['maxBounds'] = bali_bounds
-        
-        # Marker 1: Input manual pengguna (Merah)
+
+        # Marker: Input manual pengguna (Merah)
         folium.Marker(
             location=[lat, lon],
-            popup=f"<b>Lokasi Input Anda</b><br>Lokasi: {lat:.5f}, {lon:.5f}",
+            popup=f"<b>Lokasi Input Anda</b><br>Koordinat: {lat:.5f}, {lon:.5f}",
+            tooltip="📌 Lokasi Input Anda",
             icon=folium.Icon(color="red", icon="info-sign")
         ).add_to(m)
-        
-        # Marker 2: Objek wisata nyata terdekat (Biru)
-        folium.Marker(
-            location=[ref_lat, ref_lon],
-            popup=f"<b>Referensi Terdekat:</b> {nearest_spot['nama']}<br>Kategori: {nearest_spot['kategori']}<br>Lokasi: {ref_lat:.5f}, {ref_lon:.5f}",
-            icon=folium.Icon(color="blue", icon="star")
-        ).add_to(m)
-        
-        # Garis penghubung jika jaraknya cukup signifikan
-        if nearest_spot['distance_km'] > 0.05:
-            folium.PolyLine(
-                locations=[[lat, lon], [ref_lat, ref_lon]],
-                color="#3b82f6",
-                weight=2.5,
-                dash_array='5, 5',
-                tooltip=f"Jarak ke Referensi: {nearest_spot['distance_km']:.2f} km"
+
+        # Warna marker untuk top-N (peringkat 1 = biru terang, dst.)
+        spot_colors = ["blue", "darkblue", "cadetblue", "lightblue", "purple"]
+
+        for rank, spot in enumerate(top_spots):
+            color = spot_colors[rank] if rank < len(spot_colors) else "gray"
+            r_val = spot['rating']
+            r_str = f"{r_val:.1f}" if isinstance(r_val, (int, float)) and not pd.isna(r_val) else str(r_val)
+            label = " ★ Referensi Utama" if rank == 0 else ""
+
+            folium.Marker(
+                location=[spot['latitude'], spot['longitude']],
+                popup=(
+                    f"<b>#{rank+1}{label}</b><br>"
+                    f"<b>{spot['nama']}</b><br>"
+                    f"Kategori: {spot['kategori']}<br>"
+                    f"Rating: ⭐ {r_str}<br>"
+                    f"Jarak dari input: {spot['distance_km']:.2f} km"
+                ),
+                tooltip=f"#{rank+1} {spot['nama']} ({spot['distance_km']:.2f} km)",
+                icon=folium.Icon(color=color, icon="star")
             ).add_to(m)
-        
+
+            # Garis putus-putus dari input ke masing-masing spot
+            if spot['distance_km'] > 0.05:
+                folium.PolyLine(
+                    locations=[[lat, lon], [spot['latitude'], spot['longitude']]],
+                    color="#3b82f6" if rank == 0 else "#94a3b8",
+                    weight=2.5 if rank == 0 else 1.5,
+                    dash_array='5, 5',
+                    tooltip=f"#{rank+1} {spot['nama']}: {spot['distance_km']:.2f} km"
+                ).add_to(m)
+
         st_folium(m, width=700, height=350, returned_objects=[])
         
     st.markdown("---")
@@ -422,25 +535,27 @@ def main():
         st.markdown("<h3 style='text-align: center;'>📊 Hasil Prediksi (Pendekatan Spasial Terdekat)</h3>", unsafe_allow_html=True)
         
         with st.spinner("Melakukan inferensi spasial..."):
-            # Memproyeksikan koordinat input ke koordinat nyata objek terdekat
-            nearest_spot = find_nearest_spot(lat, lon, selected_kabupaten, df_ref)
+            # Ambil top-N spot terdekat di kabupaten terpilih
+            top_spots = find_top_n_spots(lat, lon, selected_kabupaten, df_ref)
+            # Gunakan spot #1 (terdekat) sebagai referensi utama untuk inferensi model
+            nearest_spot = top_spots[0]
             ref_lat = nearest_spot['latitude']
             ref_lon = nearest_spot['longitude']
-            
+
             # Hitung jarak dari Denpasar berdasarkan koordinat nyata terdekat
             dist_ref = haversine_distance(DENPASAR_LAT, DENPASAR_LON, ref_lat, ref_lon)
             kat_encoded = le_kategori.transform([selected_kategori])[0]
             kab_encoded = le_kabupaten.transform([selected_kabupaten])[0]
-            
+
             x_df = pd.DataFrame(
-                [[kat_encoded, kab_encoded, ref_lat, ref_lon, dist_ref]], 
+                [[kat_encoded, kab_encoded, ref_lat, ref_lon, dist_ref]],
                 columns=['kategori_encoded', 'kabupaten_encoded', 'latitude', 'longitude', 'DistanceToCenter']
             )
             x_scaled = scaler.transform(x_df)
-            
+
             prediction = svm_model.predict(x_scaled)[0]
             probabilities = svm_model.predict_proba(x_scaled)[0]
-            
+
             if prediction == 2:
                 kelas_teks = "SEMPURNA (Rating 5.0)"
                 css_class = "result-sempurna"
@@ -450,23 +565,23 @@ def main():
             else:
                 kelas_teks = "KURANG (Rating < 4.5)"
                 css_class = "result-kurang"
-                
+
             col_res1, col_res2 = st.columns([2, 1])
             with col_res1:
                 st.markdown(f"""
                 <div class='{css_class}' style='height: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px;'>
                     <div>{kelas_teks}</div>
                     <div style='font-size: 14px; font-weight: normal; margin-top: 10px; opacity: 0.8;'>
-                        Referensi Terproyeksi: {nearest_spot['nama']} ({nearest_spot['distance_km']:.2f} km)
+                        Referensi Utama: {nearest_spot['nama']} ({nearest_spot['distance_km']:.2f} km dari input)
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 # Tambahkan penjelasan kualitatif pariwisata (DSS Insights) di bawah banner hasil
                 investor_insight, gov_insight, spatial_desc = generate_explanation(
                     prediction, dist_ref, selected_kategori, selected_kabupaten
                 )
-                
+
                 st.markdown("<div class='glass-container' style='margin-top: 20px;'>", unsafe_allow_html=True)
                 st.markdown("<h4 style='margin-top:0;'>💡 Analisis Keputusan & Wawasan Spasial (DSS Insights)</h4>", unsafe_allow_html=True)
                 st.markdown(investor_insight, unsafe_allow_html=True)
@@ -475,140 +590,53 @@ def main():
                 st.markdown("<hr style='margin: 12px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
                 st.markdown(spatial_desc, unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
-            
+
             with col_res2:
+                # Panel Probabilitas
                 st.markdown("<div class='glass-container'>", unsafe_allow_html=True)
                 st.markdown("#### Detail Probabilitas")
                 st.write(f"🟢 Sempurna: **{probabilities[2]*100:.1f}%**")
                 st.write(f"🔵 Bagus: **{probabilities[1]*100:.1f}%**")
                 st.write(f"🔴 Kurang: **{probabilities[0]*100:.1f}%**")
                 st.markdown("---")
-                st.write(f"📍 **Objek Referensi:** {nearest_spot['nama']}")
-                st.write(f"📏 **Jarak ke Referensi:** {nearest_spot['distance_km']:.2f} km")
-                st.write(f"🏢 **Jarak ke Denpasar (Pusat):** {dist_ref:.2f} km")
+                st.write(f"🏢 **Jarak ke Denpasar:** {dist_ref:.2f} km")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-    # ================================================================
-    # SECTION: TABEL PERBANDINGAN BATCH PREDICTION PER KABUPATEN
-    # ================================================================
-    st.markdown("---")
-    st.markdown("<h3 style='text-align: center;'>🗃️ Tabel Perbandingan Semua Objek Wisata per Kabupaten</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #94a3b8;'>Model SVM memproyeksikan seluruh objek wisata di kabupaten terpilih sekaligus berdasarkan koordinat dan kategorinya.</p>", unsafe_allow_html=True)
-
-    col_filter1, col_filter2 = st.columns([1, 1])
-    with col_filter1:
-        batch_kabupaten = st.selectbox("📌 Pilih Kabupaten untuk Perbandingan", cities, key='batch_kab')
-    with col_filter2:
-        label_filter_options = ["Semua Kelas", "🟢 Sempurna", "🔵 Bagus", "🔴 Kurang"]
-        batch_label_filter = st.selectbox("🔍 Filter Hasil Prediksi", label_filter_options, key='batch_label_filter')
-
-    batch_btn = st.button("🔄 Jalankan Batch Prediction", key='batch_btn')
-
-    if batch_btn:
-        with st.spinner(f"Memproses seluruh data wisata di {batch_kabupaten}..."):
-            # Ambil semua data dari kabupaten yang dipilih
-            df_batch = df_ref[df_ref['kabupaten_kota'].str.strip().str.lower() == batch_kabupaten.strip().lower()].copy()
-            df_batch = df_batch.dropna(subset=['latitude', 'longitude'])
-
-            if df_batch.empty:
-                st.warning("Tidak ada data wisata untuk kabupaten yang dipilih.")
-            else:
-                results = []
-                for _, row in df_batch.iterrows():
-                    try:
-                        dist = haversine_distance(DENPASAR_LAT, DENPASAR_LON, row['latitude'], row['longitude'])
-                        kat_enc = le_kategori.transform([row['kategori']])[0]
-                        kab_enc = le_kabupaten.transform([row['kabupaten_kota']])[0]
-
-                        x = pd.DataFrame(
-                            [[kat_enc, kab_enc, row['latitude'], row['longitude'], dist]],
-                            columns=['kategori_encoded', 'kabupaten_encoded', 'latitude', 'longitude', 'DistanceToCenter']
-                        )
-                        x_sc = scaler.transform(x)
-                        pred = svm_model.predict(x_sc)[0]
-                        prob = svm_model.predict_proba(x_sc)[0]
-
-                        if pred == 2:
-                            label = "🟢 Sempurna"
-                        elif pred == 1:
-                            label = "🔵 Bagus"
-                        else:
-                            label = "🔴 Kurang"
-
-                        results.append({
-                            "Nama Objek Wisata": row['nama'],
-                            "Kategori": row['kategori'],
-                            "Latitude": round(row['latitude'], 5),
-                            "Longitude": round(row['longitude'], 5),
-                            "Jarak ke Denpasar (km)": round(dist, 2),
-                            "Hasil Prediksi SVM": label,
-                            "Prob. Sempurna (%)": round(prob[2] * 100, 1),
-                            "Prob. Bagus (%)": round(prob[1] * 100, 1),
-                            "Prob. Kurang (%)": round(prob[0] * 100, 1),
-                        })
-                    except Exception:
-                        continue
-
-                df_result = pd.DataFrame(results)
-
-                # Terapkan filter label jika dipilih
-                if batch_label_filter != "Semua Kelas":
-                    df_result = df_result[df_result["Hasil Prediksi SVM"] == batch_label_filter]
-
-                # Ringkasan Statistik Kabupaten
-                df_all_results = pd.DataFrame(results)
-                sempurna_count = (df_all_results["Hasil Prediksi SVM"] == "🟢 Sempurna").sum()
-                bagus_count    = (df_all_results["Hasil Prediksi SVM"] == "🔵 Bagus").sum()
-                kurang_count   = (df_all_results["Hasil Prediksi SVM"] == "🔴 Kurang").sum()
-                total_count    = len(df_all_results)
-
-                st.markdown(f"""
-                <div style='display: flex; gap: 16px; margin-bottom: 20px;'>
-                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(16,185,129,0.12); border: 1px solid #10b981; text-align: center;'>
-                        <div style='font-size: 28px; font-weight: bold; color: #34d399;'>{sempurna_count}</div>
-                        <div style='color: #94a3b8; font-size: 13px;'>🟢 Sempurna</div>
-                    </div>
-                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(59,130,246,0.12); border: 1px solid #3b82f6; text-align: center;'>
-                        <div style='font-size: 28px; font-weight: bold; color: #60a5fa;'>{bagus_count}</div>
-                        <div style='color: #94a3b8; font-size: 13px;'>🔵 Bagus</div>
-                    </div>
-                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(239,68,68,0.12); border: 1px solid #ef4444; text-align: center;'>
-                        <div style='font-size: 28px; font-weight: bold; color: #f87171;'>{kurang_count}</div>
-                        <div style='color: #94a3b8; font-size: 13px;'>🔴 Kurang</div>
-                    </div>
-                    <div style='flex:1; padding: 16px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15); text-align: center;'>
-                        <div style='font-size: 28px; font-weight: bold; color: #e2e8f0;'>{total_count}</div>
-                        <div style='color: #94a3b8; font-size: 13px;'>📊 Total Data</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if df_result.empty:
-                    st.info(f"Tidak ada objek wisata dengan prediksi **{batch_label_filter}** di {batch_kabupaten}.")
-                else:
-                    st.dataframe(
-                        df_result,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Hasil Prediksi SVM": st.column_config.TextColumn("Prediksi SVM", width="medium"),
-                            "Prob. Sempurna (%)": st.column_config.ProgressColumn("Sempurna %", min_value=0, max_value=100, format="%.1f%%"),
-                            "Prob. Bagus (%)": st.column_config.ProgressColumn("Bagus %", min_value=0, max_value=100, format="%.1f%%"),
-                            "Prob. Kurang (%)": st.column_config.ProgressColumn("Kurang %", min_value=0, max_value=100, format="%.1f%%"),
-                        }
+                # Panel Top-N Referensi Terproyeksi
+                st.markdown("<div class='glass-container' style='margin-top: 15px;'>", unsafe_allow_html=True)
+                st.markdown(f"#### 📍 Top {TOP_N_SPOTS} Referensi Terdekat")
+                st.caption(f"Objek wisata nyata di {selected_kabupaten} paling dekat dari titik input Anda.")
+                rank_colors = ["🔵", "🔹", "🩵", "🔷", "💠"]
+                for rank, spot in enumerate(top_spots):
+                    r_val = spot['rating']
+                    r_str = f"{r_val:.1f}" if isinstance(r_val, (int, float)) and not pd.isna(r_val) else str(r_val)
+                    icon = rank_colors[rank] if rank < len(rank_colors) else "▪️"
+                    label = " ★ Utama" if rank == 0 else ""
+                    border_color = "#3b82f6" if rank == 0 else "#475569"
+                    bg_opacity = 0.12 if rank == 0 else 0.05
+                    st.markdown(
+                        f"""
+                        <div style='
+                            background: rgba(255,255,255,{bg_opacity});
+                            border-radius: 8px;
+                            padding: 10px 12px;
+                            margin-bottom: 8px;
+                            border-left: 3px solid {border_color};
+                        '>
+                            <div style='font-size:13px; font-weight:bold; color:#e2e8f0;'>
+                                {icon} #{rank+1} {spot['nama']}
+                                <span style='font-size:10px; color:#94a3b8; font-weight:normal;'>{label}</span>
+                            </div>
+                            <div style='font-size:11px; color:#94a3b8; margin-top:3px;'>
+                                📂 {spot['kategori']} &nbsp;|&nbsp;
+                                ⭐ {r_str} &nbsp;|&nbsp;
+                                📏 {spot['distance_km']:.2f} km
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
                     )
-
-                    # Tombol unduh CSV
-                    csv_export = df_result.copy()
-                    csv_export["Hasil Prediksi SVM"] = csv_export["Hasil Prediksi SVM"].str.replace(r'[🟢🔵🔴]\s*', '', regex=True)
-                    csv_bytes = csv_export.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="⬇️ Unduh Hasil sebagai CSV",
-                        data=csv_bytes,
-                        file_name=f"prediksi_wisata_{batch_kabupaten.replace(' ', '_')}.csv",
-                        mime="text/csv",
-                        key='download_csv'
-                    )
+                st.markdown("</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
